@@ -2,14 +2,11 @@ import requests
 import yfinance as yf
 from functools import lru_cache
 from ..config import SEC_USER_EMAIL, HTTP_TIMEOUT
+import re
 
 UA = {"User-Agent": SEC_USER_EMAIL}
 
 def fetch_yahoo_core(ticker: str) -> dict:
-    """
-    Return core market fields from Yahoo Finance.
-    Possible keys: price, market_cap, shares, beta, total_debt, cash.
-    """
     t = yf.Ticker(ticker)
     out = {}
     try:
@@ -49,15 +46,10 @@ def fetch_yahoo_core(ticker: str) -> dict:
 
 @lru_cache(maxsize=1)
 def _sec_ticker_map():
-    """
-    Load SEC's official ticker-to-CIK map.
-    https://www.sec.gov/files/company_tickers.json
-    """
     url = "https://www.sec.gov/files/company_tickers.json"
     r = requests.get(url, headers=UA, timeout=HTTP_TIMEOUT)
     r.raise_for_status()
     data = r.json()
-    # data is { "0": {"cik_str":..., "ticker":"A", "title":"..."}, ... }
     mapping = {}
     for _, rec in data.items():
         t = str(rec.get("ticker", "")).upper()
@@ -67,12 +59,6 @@ def _sec_ticker_map():
     return mapping
 
 def get_cik(ticker: str) -> int:
-    """
-    Robust CIK lookup:
-    1) Try yfinance attribute if present in your installed version.
-    2) Fallback to SEC ticker map.
-    """
-    # Attempt yfinance's helper when available
     try:
         t = yf.Ticker(ticker)
         if hasattr(t, "get_cik"):
@@ -87,30 +73,24 @@ def get_cik(ticker: str) -> int:
     tkr = ticker.upper()
     if tkr in mapping:
         return mapping[tkr]
+    # last resort: browse atom
+    url = "https://www.sec.gov/cgi-bin/browse-edgar?CIK={}&owner=exclude&action=getcompany&output=atom".format(tkr)
+    r = requests.get(url, headers=UA, timeout=HTTP_TIMEOUT)
+    r.raise_for_status()
 
-    # Last-resort: try SEC browse endpoint (less reliable). Keep as final fallback.
-    try:
-        url = f"https://www.sec.gov/cgi-bin/browse-edgar?CIK={tkr}&owner=exclude&action=getcompany&output=atom"
-        r = requests.get(url, headers=UA, timeout=HTTP_TIMEOUT)
-        r.raise_for_status()
-        # The Atom feed may contain <id>...CIK0000320193...</id>; extract digits.
-        import re
-        m = re.search(r"CIK0*([0-9]+)", r.text)
-        if m:
-            return int(m.group(1))
-    except Exception:
-        pass
-
-    raise RuntimeError(f"CIK not found for ticker '{ticker}'. Ensure it is a US SEC filer.")
+    m = re.search(r"CIK0*([0-9]+)", r.text)
+    if m:
+        return int(m.group(1))
+    raise RuntimeError("CIK not found for '{}'".format(ticker))
 
 def suggest_symbols(prefix: str):
-    import requests
-    q = prefix.upper()
     try:
-        r = requests.get(f"https://query2.finance.yahoo.com/v1/finance/search?q={q}&quotesCount=6", timeout=10)
+        url = "https://query2.finance.yahoo.com/v1/finance/search"
+        r = requests.get(url, params={"q": prefix, "quotesCount": 6}, timeout=HTTP_TIMEOUT)
         r.raise_for_status()
-        quotes = r.json().get("quotes", [])
-        return [{"symbol": s.get("symbol"), "shortname": s.get("shortname")} for s in quotes]
+        out = []
+        for s in r.json().get("quotes", []):
+            out.append({"symbol": s.get("symbol"), "shortname": s.get("shortname")})
+        return out
     except Exception:
         return []
-

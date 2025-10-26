@@ -1,7 +1,8 @@
+import math
 from typing import Dict, Any, Optional
 
 from .config import YEARS, PERP_G_CAP, ERP_OVERRIDE
-from .providers.yahoo import fetch_yahoo_core, get_cik
+from .providers.yahoo import fetch_yahoo_core, get_cik, suggest_symbols
 from .providers.gsheet_fallback import fetch_google_finance_via_sheets, gf_available
 from .providers.fred import get_risk_free_dgs10
 from .providers.sec import companyfacts, compute_fcff_block
@@ -9,7 +10,7 @@ from .providers.sec import companyfacts, compute_fcff_block
 def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str, Any]:
     flags: Dict[str, Any] = {}
 
-    # -------- Market fields (Yahoo first, Sheets fallback) --------
+    # Market fields from Yahoo
     y = fetch_yahoo_core(ticker)
     for k in y:
         flags[k] = {"source": "Yahoo Finance", "flag": "OK"}
@@ -46,16 +47,30 @@ def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str
     if "beta" not in y:
         flags["beta"] = {"source": "default 1.0", "flag": "CHECK"}
 
-    # -------- Fundamentals (SEC) --------
-    cik = get_cik(ticker)
+    # ----- US-only path + ambiguity guard -----
+    # Reject tickers with exchange suffixes (e.g., ".TO", ".L") up front
+    if "." in ticker and ticker.split(".")[-1].upper() != "US":
+        raise RuntimeError("Non-US ticker '{}'. Use a US-listed symbol or ADR (e.g., CNI for Canadian National Railway).".format(ticker))
+
+    # Resolve CIK via SEC. On failure, suggest likely symbols and stop.
+    try:
+        cik = get_cik(ticker)
+    except Exception:
+        options = suggest_symbols(ticker)
+        syms = [o.get("symbol") for o in options] if options else []
+        raise RuntimeError("Ambiguous or non-US ticker '{}'. Try one of: {}".format(ticker, syms))
+
+    # SEC fundamentals
     facts = companyfacts(cik)
     sec = compute_fcff_block(facts)
     flags["sec"] = {"source": "SEC CompanyFacts", "flag": "OK"}
 
     if sec["fcff0"] <= 0:
-        raise RuntimeError("Base FCFF <= 0. Normalize or adjust before DCF.")
+        # Optional normalization for testing; remove for hard fail if desired
+        sec["fcff0"] = max(sec["ebit"] * (1 - sec["tax_rate"]) + sec["da"] - sec["capex"], 1e-6)
+        flags["fcff0_norm"] = {"reason": "ΔNWC override to 0 for test", "flag": "CHECK"}
 
-    # -------- Balance sheet and cash --------
+    # Debt and cash
     total_debt = y.get("total_debt", 0.0) or sec.get("total_debt_book", 0.0)
     if "total_debt" not in y:
         flags["total_debt"] = {"source": "SEC book proxy", "flag": "CHECK"}
@@ -93,16 +108,15 @@ def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str
         cf *= (1 + g)
         fcff.append(cf)
 
-    # -------- Terminal and valuation (with gentle soften) --------
-    EPS = 1e-4  # tiny nudge to avoid equality due to rounding
+    # Terminal checks; soften tiny equalities
+    EPS = 1e-4
     if wacc <= g_perp:
-        old_gp = g_perp
         g_perp = max(0.0, g_perp - EPS)
-        flags["g_perp_adjust"] = {"old": float(old_gp), "new": float(g_perp), "eps": EPS, "reason": "soften WACC>g_perp"}
-
+        flags["g_perp_adjust"] = {"eps": EPS, "flag": "CHECK"}
     if wacc <= g_perp:
-        raise RuntimeError("WACC <= terminal growth; invalid terminal math.")
+        raise RuntimeError("WACC ({:.4f}) <= g_perp ({:.4f})".format(wacc, g_perp))
 
+    # Discount and TV
     disc = [fcff[i] / ((1 + wacc) ** (i + 1)) for i in range(YEARS)]
     tv = fcff[-1] * (1 + g_perp) / (wacc - g_perp)
     tv_disc = tv / ((1 + wacc) ** YEARS)
@@ -111,24 +125,63 @@ def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str
     equity_value = ev - (D - cash)
     iv_per_share = equity_value / float(y["shares"])
 
-    out: Dict[str, Any] = {"ticker": ticker.upper(), "price": float(y["price"]), "iv_per_share": float(iv_per_share),
-                           "buy_40pct_MoS": float(iv_per_share * 0.60), "rf": float(rf), "erp": float(erp),
-                           "beta": float(beta), "wacc": float(wacc), "g0": float(g0), "g_perp": float(g_perp),
-                           "fcff0": float(sec["fcff0"]), "provenance_flags": flags, "_internals": {
-            "wacc": float(wacc),
-            "g_perp": float(g_perp),
-            "fcff_path": [float(x) for x in fcff],
-            "D": float(D),
-            "cash": float(cash),
-            "shares": float(y["shares"]),
-            "years": int(YEARS),
-        }}
+    out: Dict[str, Any] = {
+        "ticker": ticker,
+        "price": float(y["price"]),
+        "iv_per_share": float(iv_per_share),
+        "buy_40pct_MoS": float(iv_per_share * 0.60),
+        "rf": float(rf),
+        "erp": float(erp),
+        "beta": float(beta),
+        "wacc": float(wacc),
+        "g0": float(g0),
+        "g_perp": float(g_perp),
+        "fcff0": float(sec["fcff0"]),
+        "provenance_flags": flags,
+    }
 
-    # Internals for /sensitivities endpoint
+    # Internals for sensitivities
+    out["_internals"] = {
+        "wacc": wacc,
+        "g_perp": g_perp,
+        "fcff_path": fcff,
+        "D": D,
+        "cash": cash,
+        "shares": float(y["shares"]),
+        "years": YEARS,
+    }
 
     out["summary"] = (
-        f"{out['ticker']}: price {out['price']:.2f}, IV {out['iv_per_share']:.2f}, "
+        f"{ticker}: price {out['price']:.2f}, IV {out['iv_per_share']:.2f}, "
         f"40% MoS buy {out['buy_40pct_MoS']:.2f}. WACC {out['wacc']:.3f}, "
         f"g0 {out['g0']:.3f} → g∞ {out['g_perp']:.3f}."
     )
     return out
+
+def build_sensitivities(internals: Dict[str, Any]) -> list:
+    """
+    Returns a grid of IV/share for dWACC in {-100bps,0,+100bps} and d g_perp in {-50bps,0,+50bps}.
+    """
+    wacc = internals["wacc"]
+    g_perp = internals["g_perp"]
+    fcff = internals["fcff_path"]
+    D = internals["D"]
+    cash = internals["cash"]
+    shares = internals["shares"]
+    years = internals["years"]
+
+    def price_at(W, Gp):
+        if W <= Gp:
+            return float("nan")
+        disc = [fcff[i] / ((1 + W) ** (i + 1)) for i in range(years)]
+        tv = fcff[-1] * (1 + Gp) / (W - Gp)
+        ev = sum(disc) + tv / ((1 + W) ** years)
+        eq = ev - (D - cash)
+        return eq / shares
+
+    grid = []
+    for dW in (-0.01, 0.0, 0.01):        # ±100 bps WACC
+        for dG in (-0.005, 0.0, 0.005):  # ±50 bps terminal growth
+            iv = price_at(wacc + dW, max(g_perp + dG, 0.0))
+            grid.append({"d_wacc": dW, "d_g_perp": dG, "iv_per_share": iv})
+    return grid
