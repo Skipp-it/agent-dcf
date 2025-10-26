@@ -104,12 +104,13 @@ def get_cik(ticker: str) -> int:
     raise RuntimeError(f"CIK not found for ticker '{ticker}'. Ensure it is a US SEC filer.")
 
 def suggest_symbols(prefix: str):
-    # minimal fast search via Yahoo’s auto-complete
     import requests
     q = prefix.upper()
-    r = requests.get(f"https://query2.finance.yahoo.com/v1/finance/search?q={q}&quotesCount=6")
-    syms = []
-    if r.ok:
-        for s in r.json().get("quotes", []):
-            syms.append({"symbol": s.get("symbol"), "shortname": s.get("shortname")})
-    return syms
+    try:
+        r = requests.get(f"https://query2.finance.yahoo.com/v1/finance/search?q={q}&quotesCount=6", timeout=10)
+        r.raise_for_status()
+        quotes = r.json().get("quotes", [])
+        return [{"symbol": s.get("symbol"), "shortname": s.get("shortname")} for s in quotes]
+    except Exception:
+        return []
+

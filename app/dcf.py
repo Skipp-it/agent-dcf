@@ -102,6 +102,7 @@ def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str
 
     if wacc <= g_perp:
         raise RuntimeError("WACC <= terminal growth; invalid terminal math.")
+
     disc = [fcff[i] / ((1 + wacc) ** (i + 1)) for i in range(YEARS)]
     tv = fcff[-1] * (1 + g_perp) / (wacc - g_perp)
     tv_disc = tv / ((1 + wacc) ** YEARS)
