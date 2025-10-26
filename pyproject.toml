@@ -1,0 +1,19 @@
+[project]
+name = "agent-dcf"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = [
+  "fastapi",
+  "uvicorn[standard]",
+  "pandas",
+  "requests",
+  "yfinance",
+  "python-dateutil",
+  "google-auth",
+  "gspread",
+  "google-auth-httplib2"
+]
+
+[tool.uvicorn]
+host = "0.0.0.0"
+port = 8080

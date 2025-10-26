@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: agent-dcf
+Version: 0.1.0
+Requires-Python: >=3.9
+Requires-Dist: fastapi
+Requires-Dist: uvicorn[standard]
+Requires-Dist: pandas
+Requires-Dist: requests
+Requires-Dist: yfinance
+Requires-Dist: python-dateutil
+Requires-Dist: google-auth
+Requires-Dist: gspread
+Requires-Dist: google-auth-httplib2

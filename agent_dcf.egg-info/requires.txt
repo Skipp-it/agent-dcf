@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+pandas
+requests
+yfinance
+python-dateutil
+google-auth
+gspread
+google-auth-httplib2
