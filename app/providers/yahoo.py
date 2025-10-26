@@ -15,6 +15,9 @@ def fetch_yahoo_core(ticker: str) -> dict:
         info = {}
     try:
         fast = getattr(t, "fast_info", {}) or {}
+        yh = fast.get("yearHigh") or info.get("fiftyTwoWeekHigh")
+        if yh is not None:
+            out["year_high"] = float(yh)
     except Exception:
         fast = {}
 

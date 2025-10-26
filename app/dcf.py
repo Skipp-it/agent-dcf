@@ -1,4 +1,3 @@
-import math
 from typing import Dict, Any, Optional
 
 from .config import YEARS, PERP_G_CAP, ERP_OVERRIDE
@@ -124,6 +123,11 @@ def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str
     ev = sum(disc) + tv_disc
     equity_value = ev - (D - cash)
     iv_per_share = equity_value / float(y["shares"])
+    year_high = float(y.get("year_high", 0.0))
+    market_cap = float(y["market_cap"])
+    cash_val = float(cash)
+    total_debt_val = float(total_debt)
+    mos_required = 0.40
 
     out: Dict[str, Any] = {
         "ticker": ticker,
@@ -137,6 +141,11 @@ def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str
         "g0": float(g0),
         "g_perp": float(g_perp),
         "fcff0": float(sec["fcff0"]),
+        "market_cap": market_cap,
+        "cash": cash_val,
+        "total_debt": total_debt_val,
+        "year_high": year_high,
+        "mos_required": mos_required,
         "provenance_flags": flags,
     }
 
