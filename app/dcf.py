@@ -9,7 +9,7 @@ from .providers.sec import companyfacts, compute_fcff_block
 def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str, Any]:
     flags: Dict[str, Any] = {}
 
-    # Market fields from Yahoo
+    # -------- Market fields (Yahoo first, Sheets fallback) --------
     y = fetch_yahoo_core(ticker)
     for k in y:
         flags[k] = {"source": "Yahoo Finance", "flag": "OK"}
@@ -46,7 +46,7 @@ def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str
     if "beta" not in y:
         flags["beta"] = {"source": "default 1.0", "flag": "CHECK"}
 
-    # SEC fundamentals
+    # -------- Fundamentals (SEC) --------
     cik = get_cik(ticker)
     facts = companyfacts(cik)
     sec = compute_fcff_block(facts)
@@ -55,7 +55,7 @@ def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str
     if sec["fcff0"] <= 0:
         raise RuntimeError("Base FCFF <= 0. Normalize or adjust before DCF.")
 
-    # Debt and cash
+    # -------- Balance sheet and cash --------
     total_debt = y.get("total_debt", 0.0) or sec.get("total_debt_book", 0.0)
     if "total_debt" not in y:
         flags["total_debt"] = {"source": "SEC book proxy", "flag": "CHECK"}
@@ -93,7 +93,13 @@ def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str
         cf *= (1 + g)
         fcff.append(cf)
 
-    # Discount and TV
+    # -------- Terminal and valuation (with gentle soften) --------
+    EPS = 1e-4  # tiny nudge to avoid equality due to rounding
+    if wacc <= g_perp:
+        old_gp = g_perp
+        g_perp = max(0.0, g_perp - EPS)
+        flags["g_perp_adjust"] = {"old": float(old_gp), "new": float(g_perp), "eps": EPS, "reason": "soften WACC>g_perp"}
+
     if wacc <= g_perp:
         raise RuntimeError("WACC <= terminal growth; invalid terminal math.")
     disc = [fcff[i] / ((1 + wacc) ** (i + 1)) for i in range(YEARS)]
@@ -104,23 +110,23 @@ def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str
     equity_value = ev - (D - cash)
     iv_per_share = equity_value / float(y["shares"])
 
-    out: Dict[str, Any] = {
-        "ticker": ticker,
-        "price": float(y["price"]),
-        "iv_per_share": float(iv_per_share),
-        "buy_40pct_MoS": float(iv_per_share * 0.60),
-        "rf": float(rf),
-        "erp": float(erp),
-        "beta": float(beta),
-        "wacc": float(wacc),
-        "g0": float(g0),
-        "g_perp": float(g_perp),
-        "fcff0": float(sec["fcff0"]),
-        "provenance_flags": flags,
-    }
+    out: Dict[str, Any] = {"ticker": ticker.upper(), "price": float(y["price"]), "iv_per_share": float(iv_per_share),
+                           "buy_40pct_MoS": float(iv_per_share * 0.60), "rf": float(rf), "erp": float(erp),
+                           "beta": float(beta), "wacc": float(wacc), "g0": float(g0), "g_perp": float(g_perp),
+                           "fcff0": float(sec["fcff0"]), "provenance_flags": flags, "_internals": {
+            "wacc": float(wacc),
+            "g_perp": float(g_perp),
+            "fcff_path": [float(x) for x in fcff],
+            "D": float(D),
+            "cash": float(cash),
+            "shares": float(y["shares"]),
+            "years": int(YEARS),
+        }}
+
+    # Internals for /sensitivities endpoint
 
     out["summary"] = (
-        f"{ticker}: price {out['price']:.2f}, IV {out['iv_per_share']:.2f}, "
+        f"{out['ticker']}: price {out['price']:.2f}, IV {out['iv_per_share']:.2f}, "
         f"40% MoS buy {out['buy_40pct_MoS']:.2f}. WACC {out['wacc']:.3f}, "
         f"g0 {out['g0']:.3f} → g∞ {out['g_perp']:.3f}."
     )
