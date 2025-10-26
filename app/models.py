@@ -32,5 +32,8 @@ class SensPoint(BaseModel):
 class SensResponse(BaseModel):
     ticker: str
     base_iv_per_share: float
+    price: float
+    wacc: float
+    g0: float
+    g_perp: float
     table: List[SensPoint]
-
