@@ -149,6 +149,12 @@ def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str
         "provenance_flags": flags,
     }
 
+    out["summary"] = (
+        f"{ticker}: price {out['price']:.2f}, IV {out['iv_per_share']:.2f}, "
+        f"40% MoS buy {out['buy_40pct_MoS']:.2f}. WACC {out['wacc']:.3f}, "
+        f"g0 {out['g0']:.3f} → g∞ {out['g_perp']:.3f}."
+    )
+
     # Internals for sensitivities
     out["_internals"] = {
         "wacc": wacc,
@@ -160,11 +166,6 @@ def run_valuation(ticker: str, erp_override: Optional[float] = None) -> Dict[str
         "years": YEARS,
     }
 
-    out["summary"] = (
-        f"{ticker}: price {out['price']:.2f}, IV {out['iv_per_share']:.2f}, "
-        f"40% MoS buy {out['buy_40pct_MoS']:.2f}. WACC {out['wacc']:.3f}, "
-        f"g0 {out['g0']:.3f} → g∞ {out['g_perp']:.3f}."
-    )
     return out
 
 def build_sensitivities(internals: Dict[str, Any]) -> list:
